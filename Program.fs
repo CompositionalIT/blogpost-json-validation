@@ -26,26 +26,31 @@ module Domain =
 
 module Dto =
     type Greeting = { Addressee: string; Tone: string }
-
     let toneFromString =
         function
         | "Formal" -> Ok Domain.Tone.Formal
         | "Casual" -> Ok Domain.Tone.Casual
         | unknown -> Error $"Unknown tone {unknown}"
 
+    let validateAddressee addressee =
+        if addressee |> String.IsNullOrWhiteSpace then
+            Error "Missing addressee"
+        else
+            Ok addressee
+
     let greetingFromDto dto =
-        result {
+        validation {
             let! tone = toneFromString dto.Tone
+            and! addressee = validateAddressee dto.Addressee
 
             return
-                { Domain.Addressee = dto.Addressee
+                { Domain.Addressee = addressee
                   Domain.Tone = tone }
         }
 
 open Domain
 
-let greetingHandler next (ctx: HttpContext) =
-    task {
+let greetingHandler next (ctx: HttpContext) = task {
         let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
 
         match Dto.greetingFromDto greeting with
@@ -54,9 +59,10 @@ let greetingHandler next (ctx: HttpContext) =
                 match greeting.Tone with
                 | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
                 | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
-
             return! text message next ctx
-        | Error e -> return! (setStatusCode 400 >=> text e) next ctx
+        | Error e ->
+            let errorMessage = String.concat "; " e
+            return! (setStatusCode 400 >=> text errorMessage ) next ctx
     }
 
 let webApp =

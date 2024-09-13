@@ -1,7 +1,6 @@
 
-# Deserializing JSON in F#
 
-Ingesting data in a Giraffe app might seem trivial, given it's very convenient JSON `ctx.BindJsonASync<T>() function. But there are a few common pitfalls here. In this blog post, we'll cover how to make sure you deserialize safely, either using these built-in functions with our own validation, or using Thoth.Json to make your deserialization super smart!
+Ingesting data in a Giraffe app might seem trivial, given it's very convenient JSON `ctx.BindJsonASync<T>()` function. But there are a few common pitfalls here. In this blog post, we'll cover how to make sure you deserialize safely!
 
 
 Throughout this post, we'll expand on this simple handler, expanding on it in ways that will expose the pitfalls one by one.
@@ -9,10 +8,9 @@ Throughout this post, we'll expand on this simple handler, expanding on it in wa
 ```fsharp
 type Greeting = { Addressee: string }
 
-let indexHandler next (ctx: HttpContext) =
-    task {
+let indexHandler next (ctx: HttpContext) = task {
         let! greeting = ctx.BindJsonAsync<Greeting>()
-        let message = $"Hello world {greeting.Addressee}, from Giraffe!"
+        let message = sprintf "Hello world %s, from Giraffe!" greeting.Addressee
         return! text message next ctx
     }
 ```
@@ -29,7 +27,7 @@ returns
 Hello world Barry, from Giraffe!
 ```
 
-## Pitfall 1: Complex types and decoding directly into your rich domain
+# Pitfall 1: Complex types and decoding directly into your rich domain
 
 As soon as we start expanding our model a bit, things go south. Let's see what happens if we add a Discriminated Union to our Greeting:
 
@@ -43,13 +41,13 @@ type Greeting = {
     Tone: Tone
 }
 
-let greetingHandler next (ctx: HttpContext) =
-    task {
+let greetingHandler next (ctx: HttpContext) = task {
         let! greeting = ctx.BindJsonAsync<Greeting>()
         let message =
             match greeting.Tone with
-            | Formal -> $"Salutations, {greeting.Addressee}. With the highest respect, Giraffe"
-            | Casual -> $"Hello world {greeting.Addressee}, from Giraffe!"
+            | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
+            | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
+
         return! text message next ctx
     }
 ```
@@ -65,7 +63,7 @@ returns a 500 response:
 No 'Case' property with union name found. Path '', line 1, position 37.
 ```
 
-### Ugly requests
+## Ugly requests
 
 The JSON deserializer dictates the format `{ case: string; fields: string list}`. It makes for a pretty ugly request body:
 
@@ -77,11 +75,12 @@ returns
 Hello world Barry, from Giraffe!
 ```
 
-### Tight coupling
+## Tight coupling
 
 What's even worse, about directly serializing into your domain is that your API becomes super tightly coupled with your domain. Add an extra field to a record? The consumer needs to know. Change the name of a union case? Consumer needs to know!
 
-Instead, split the data you ingest into very simple DTO's that can exist out of simple records. You can transform them into domain types easily:
+Instead, split out the data you ingest into very simple DTO's that can exist out of simple records. You can transform them into domain types easily. We use [FsToolkit.ErrorHandling](https://demystifyfp.gitbook.io/fstoolkit-errorhandling/fstoolkit.errorhandling
+)'s result Computation Expression to validate records.
 
 ```fsharp
 module Domain =
@@ -106,8 +105,7 @@ module Dto =
         | "Casual" -> Ok Domain.Tone.Casual
         | unknown -> Error $"Unknown tone {unknown}"
         
-    let greetingFromDto dto =
-        result {
+    let greetingFromDto dto = result {
             let! tone = toneFromString dto.Tone
 
             return
@@ -116,16 +114,16 @@ module Dto =
         }
         
 open Domain
-let greetingHandler next (ctx: HttpContext) =
-    task {
+
+let greetingHandler next (ctx: HttpContext) = task {
         let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
-        
+
         match Dto.greetingFromDto greeting with
         | Ok greeting ->
             let message =
                 match greeting.Tone with
-                | Formal -> $"Salutations, {greeting.Addressee}. With the highest respect, Giraffe"
-                | Casual -> $"Hello world {greeting.Addressee}, from Giraffe!"
+                | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
+                | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
             return! text message next ctx
         | Error e ->
             return! (setStatusCode 400 >=> text e) next ctx
@@ -133,12 +131,34 @@ let greetingHandler next (ctx: HttpContext) =
     }
 ```
 
+We can now make the request again, in a very simple format:
+
+```json
+{"addressee":"Barry","tone":"Casual"}
+```
+
+```text
+Hello world Barry, from Giraffe!
+```
+
+And if we use a wrong value for tone, we get a nice error message:
+
+```json
+{"addressee":"Barry","tone":"Mean"}
+```
+
+```text
+Unknown tone Mean
+```
+
+
 We gained a bit of complexity on the server, but the consumer gained:
 
 * Simple requests
 * Nicer error messages, with an appropriate status code
+* Less frequent API changes, because the API model is separate from the domain
 
-## Pitfall 2: decoding into null!
+# Pitfall 2: decoding into null!
 
 Everything seems OK, but what if the consumer forgets a field?
 
@@ -154,26 +174,99 @@ Hello world , from Giraffe!
 
 Something is clearly missing; so far, we have not used any functions that fail on null, but don't be fooled; `Adressee` was not decoded into an empty string; it was decoded into null!
 
-This is a sneaky one: as you see, the null values spit out by the deserializer can stay hidden pretty well, until at some point they pop up as a runtime error! Let's improve our validation; for brevity, we do ommit creating the domain type that we would generally make in cases like this:
+This is a sneaky one: as you see, the null values spit out by the deserializer can stay hidden pretty well, until at some point they pop up as a runtime error! Let's improve our validation; for brevity, we do omit creating the domain type that we would generally make in cases like this:
 
+```fsharp
+    let validateAddressee addressee =
+        if addressee |> String.IsNullOrWhiteSpace then
+            Error "Missing addressee"
+        else
+            Ok addressee
 
+    let greetingFromDto dto =
+        result {
+            let! tone = toneFromString dto.Tone
+            let! addressee = validateAddressee dto.Addressee
 
+            return
+                { Domain.Addressee = addressee
+                  Domain.Tone = tone }
+        }
+```
 
-### System.Text.Json decodes into NULL if values are missing! you need to validate everything that can be null including a null check
+That's a lot better!
 
-## Pitfall 3: Giving errors one by one
+```json
+{"tone":"Casual"}
+```
+
+returns a 400 response:
+
+```text
+Missing addressee
+```
+
+# Pitfall 3: Giving errors one by one
+
+We're validating our `Tone` and `Addressee`, but what if both are missing?
+
+```json
+{}
+```
+
+returns a 400 response:
+
+```text
+Unknown tone 
+```
+
+No lies there, but definitely not the whole truth either; It's pretty annoying to deal with one error, for another one to pop up:
+
+```json
+{"tone":"Casual"}
+```
+
+returns another 400 response:
+
+```text
+Missing addressee
+```
+
+Ideally, you'd see all errors at the same time. Fortunately, FsToolkit.ErrorHandling has the great [`validation` Computation Expression](https://www.compositional-it.com/news-blog/validation-with-f-5-and-fstoolkit/), that, when used with the `and!` keyword, instead of immediately returning errors when they are encountered, adds them to a list:
+
+```text
+module Dto =
+    ...
+    let greetingFromDto dto = validation {
+        let! tone = toneFromString dto.Tone
+        and! addressee = validateAddressee dto.Addressee
+
+        return
+            { Domain.Addressee = addressee
+              Domain.Tone = tone }
+    }
+...
+let greetingHandler next (ctx: HttpContext) = task {
+        let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
+
+        match Dto.greetingFromDto greeting with
+        | Ok greeting ->
+            ...
+        | Error e ->
+            let errorMessage = String.concat "; " e
+            return! (setStatusCode 400 >=> text errorMessage ) next ctx
+    }
 
 ```
-Nice lil example of using validation CU for validation, and sending a 404 message on failure
+
+If we make the empty request again, we get a list of errors:
+
+```text
+Unknown tone ; Missing addressee
 ```
 
-## Decoding made fun: Thoth.JSON
+# Conclusion
 
-# Thoth makes decoding more complex JSON easier by allowing you to make composable decoders; you can actually go pretty far in domain validation by using Decode.AndThen
+As you can see, Giraffe's `ctx.BindJsonAsync<Greeting>()` provides a great starting point for decoding JSON, but to create a usable API it does require a few good practices when it comes to parsing data. It's not very suitable for decoding straight into the domain, although you probably don't want to do that anyway, if you want your API to be maintainable. Always be wary of the possibility of null values sneaking into your app through the serializer, and make sure you parallelize your validation so your consumers don't waste time dealing with validation errors one by one!
 
-```
-Nice lil example of using Thoth.Json with "andThen" to deserialize a DU
-```
-
-
-## Conclusion: Giraffe's built-in JSON decoder does the job, if you are aware of it's pitfalls; in case of more complex deserialization, Thoth can be of huge help
+If you're dealing with more complex JSON, we highly recommend checking out `Thoth.Json`. It deals with most issues we addressed here out of the box. It has a bit of a learning curve, but once you get the hang of it, it provides a great way to write composable JSON decoders, with parallel validation included out of the box! We'll dedicate a blog post to it in the near future.

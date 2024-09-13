@@ -12,8 +12,8 @@ http {
 
     jsonSerialize
         {|
-        //Addressee = "Barry"
-        // Tone = "Casual"
+         Addressee = "Barry"
+         Tone = "Mean"
         |}
 }
 |> Request.send
