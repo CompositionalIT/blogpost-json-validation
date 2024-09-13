@@ -3,7 +3,35 @@
 
 Ingesting data in a Giraffe app might seem trivial, given it's very convenient JSON `ctx.BindJsonASync<T>() function. But there are a few common pitfalls here. In this blog post, we'll cover how to make sure you deserialize safely, either using these built-in functions with our own validation, or using Thoth.Json to make your deserialization super smart!
 
+
+Throughout this post, we'll expand on this simple handler, expanding on it in ways that will expose the pitfalls one by one.
+
+```fsharp
+type Greeting = { Addressee: string }
+
+let indexHandler next (ctx: HttpContext) =
+    task {
+        let! greeting = ctx.BindJsonAsync<Greeting>()
+        let message = $"Hello world {greeting.Addressee}, from Giraffe!"
+        return! text message next ctx
+    }
+```
+
+So far, we're just using records with strings, and the serializer happily deals with correct requests:
+
+```json
+{"addressee":"Barry"}
+```
+
+returns
+
+```text
+Hello world Barry, from Giraffe!
+```
+
 ## Pitfall 1: Complex types and decoding directly into your rich domain
+
+As soon as we start expanding our model a bit, things go south. Let's see what happens if we add a Discriminated Union to our Greeting:
 
 ### System.Text.Json does not decode into DUs; there is other tooling that does do it, so you can overcome it, but should you?
 
@@ -13,6 +41,8 @@ Ingesting data in a Giraffe app might seem trivial, given it's very convenient J
 ## Pitfall 2: decoding into null!
 
 ### System.Text.Json decodes into NULL if values are missing! you need to validate everything that can be null including a null check
+
+## Pitfall 3: Giving errors one by one
 
 ```
 Nice lil example of using validation CU for validation, and sending a 404 message on failure
