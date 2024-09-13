@@ -23,6 +23,13 @@ module Domain =
         | Casual
 
     type Greeting = { Addressee: string; Tone: Tone }
+    
+    module Greeting =
+        
+        let message greeting =
+            match greeting.Tone with
+                | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
+                | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
 
 module Dto =
     type Greeting = { Addressee: string; Tone: string }
@@ -55,10 +62,8 @@ let greetingHandler next (ctx: HttpContext) = task {
 
         match Dto.greetingFromDto greeting with
         | Ok greeting ->
-            let message =
-                match greeting.Tone with
-                | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
-                | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
+            let message = Greeting.message greeting
+                
             return! text message next ctx
         | Error e ->
             let errorMessage = String.concat "; " e
