@@ -23,16 +23,17 @@ module Domain =
         | Casual
 
     type Greeting = { Addressee: string; Tone: Tone }
-    
+
     module Greeting =
-        
+
         let message greeting =
             match greeting.Tone with
-                | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
-                | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
+            | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
+            | Casual -> sprintf "Hello %s, from Giraffe!" greeting.Addressee
 
 module Dto =
     type Greeting = { Addressee: string; Tone: string }
+
     let toneFromString =
         function
         | "Formal" -> Ok Domain.Tone.Formal
@@ -57,17 +58,18 @@ module Dto =
 
 open Domain
 
-let greetingHandler next (ctx: HttpContext) = task {
+let greetingHandler next (ctx: HttpContext) =
+    task {
         let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
 
         match Dto.greetingFromDto greeting with
         | Ok greeting ->
             let message = Greeting.message greeting
-                
+
             return! text message next ctx
         | Error e ->
             let errorMessage = String.concat "; " e
-            return! (setStatusCode 400 >=> text errorMessage ) next ctx
+            return! (setStatusCode 400 >=> text errorMessage) next ctx
     }
 
 let webApp =

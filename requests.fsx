@@ -8,10 +8,6 @@ http {
     POST baseUrl
     body
 
-    jsonSerialize
-        {|
-         Addressee = "Barry"
-         Tone = "Mean"
-        |}
+    jsonSerialize {| Addressee = "Barry"; Tone = "Mean" |}
 }
 |> Request.send
