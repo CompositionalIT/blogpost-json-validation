@@ -33,12 +33,131 @@ Hello world Barry, from Giraffe!
 
 As soon as we start expanding our model a bit, things go south. Let's see what happens if we add a Discriminated Union to our Greeting:
 
-### System.Text.Json does not decode into DUs; there is other tooling that does do it, so you can overcome it, but should you?
+```text
+type Tone =
+    | Formal
+    | Casual
+ 
+type Greeting = {
+    Addressee: string
+    Tone: Tone
+}
 
-### NO you should not! keep your domain and DTOs separate, so your model and API can develop independently
+let greetingHandler next (ctx: HttpContext) =
+    task {
+        let! greeting = ctx.BindJsonAsync<Greeting>()
+        let message =
+            match greeting.Tone with
+            | Formal -> $"Salutations, {greeting.Addressee}. With the highest respect, Giraffe"
+            | Casual -> $"Hello world {greeting.Addressee}, from Giraffe!"
+        return! text message next ctx
+    }
+```
+Simply passing the tone as string does not work: 
 
+```json
+{"addressee":"Barry","tone":"casual"}
+```
+
+returns a 500 response:
+
+```text
+No 'Case' property with union name found. Path '', line 1, position 37.
+```
+
+### Ugly requests
+
+The JSON deserializer dictates the format `{ case: string; fields: string list}`. It makes for a pretty ugly request body:
+
+```json
+{"addressee":"Barry","tone":{"case":"casual"}}
+```
+returns 
+```text
+Hello world Barry, from Giraffe!
+```
+
+### Tight coupling
+
+What's even worse, about directly serializing into your domain is that your API becomes super tightly coupled with your domain. Add an extra field to a record? The consumer needs to know. Change the name of a union case? Consumer needs to know!
+
+Instead, split the data you ingest into very simple DTO's that can exist out of simple records. You can transform them into domain types easily:
+
+```fsharp
+module Domain =
+    type Tone =
+        | Formal
+        | Casual
+     
+    type Greeting = {
+        Addressee: string
+        Tone: Tone
+    }
+
+module Dto =
+    type Greeting = {
+        Addressee: string
+        Tone: string
+    }
+    
+    let toneFromString =
+        function
+        | "Formal" -> Ok Domain.Tone.Formal
+        | "Casual" -> Ok Domain.Tone.Casual
+        | unknown -> Error $"Unknown tone {unknown}"
+        
+    let greetingFromDto dto =
+        result {
+            let! tone = toneFromString dto.Tone
+
+            return
+                { Domain.Addressee = dto.Addressee
+                  Domain.Tone = tone }
+        }
+        
+open Domain
+let greetingHandler next (ctx: HttpContext) =
+    task {
+        let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
+        
+        match Dto.greetingFromDto greeting with
+        | Ok greeting ->
+            let message =
+                match greeting.Tone with
+                | Formal -> $"Salutations, {greeting.Addressee}. With the highest respect, Giraffe"
+                | Casual -> $"Hello world {greeting.Addressee}, from Giraffe!"
+            return! text message next ctx
+        | Error e ->
+            return! (setStatusCode 400 >=> text e) next ctx
+    }
+    }
+```
+
+We gained a bit of complexity on the server, but the consumer gained:
+
+* Simple requests
+* Nicer error messages, with an appropriate status code
 
 ## Pitfall 2: decoding into null!
+
+Everything seems OK, but what if the consumer forgets a field?
+
+```json
+{"tone":"Casual"}
+```
+
+returns 
+
+```text
+Hello world , from Giraffe!
+```
+
+Something is clearly missing; so far, we have not used any functions that fail on null, but don't be fooled; `Adressee` was not decoded into an empty string; it was decoded into null!
+
+This is a sneaky one: as you see, the null values spit out by the deserializer can stay hidden pretty well, until at some point they pop up as a runtime error! Let's improve our validation; for brevity, we do ommit creating the domain type that we would generally make in cases like this:
+
+
+
 
 ### System.Text.Json decodes into NULL if values are missing! you need to validate everything that can be null including a null check
 

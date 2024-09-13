@@ -10,19 +10,53 @@ open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Logging
 open Microsoft.Extensions.DependencyInjection
 open Giraffe
+open FsToolkit.ErrorHandling
 
 
 // ---------------------------------
 // Models
 // ---------------------------------
 
-type Greeting = { Addressee: string }
+module Domain =
+    type Tone =
+        | Formal
+        | Casual
+
+    type Greeting = { Addressee: string; Tone: Tone }
+
+module Dto =
+    type Greeting = { Addressee: string; Tone: string }
+
+    let toneFromString =
+        function
+        | "Formal" -> Ok Domain.Tone.Formal
+        | "Casual" -> Ok Domain.Tone.Casual
+        | unknown -> Error $"Unknown tone {unknown}"
+
+    let greetingFromDto dto =
+        result {
+            let! tone = toneFromString dto.Tone
+
+            return
+                { Domain.Addressee = dto.Addressee
+                  Domain.Tone = tone }
+        }
+
+open Domain
 
 let greetingHandler next (ctx: HttpContext) =
     task {
-        let! greeting = ctx.BindJsonAsync<Greeting>()
-        let message = $"Hello world {greeting.Addressee}, from Giraffe!"
-        return! text message next ctx
+        let! greeting = ctx.BindJsonAsync<Dto.Greeting>()
+
+        match Dto.greetingFromDto greeting with
+        | Ok greeting ->
+            let message =
+                match greeting.Tone with
+                | Formal -> sprintf "Salutations, %s. With the highest respect, Giraffe" greeting.Addressee
+                | Casual -> sprintf "Hello world %s, from Giraffe!" greeting.Addressee
+
+            return! text message next ctx
+        | Error e -> return! (setStatusCode 400 >=> text e) next ctx
     }
 
 let webApp =
