@@ -1,8 +1,6 @@
 #r "nuget: FsHttp"
 
-open System.Net
 open FsHttp
-open System
 
 let baseUrl = "http://localhost:5000"
 
